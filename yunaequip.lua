@@ -1,6 +1,6 @@
 addon.name    = 'yunaequip';
 addon.author  = 'Yunas';
-addon.version = '1.0.0';
+addon.version = '1.0.1';
 addon.desc    = 'Your equipment on screen in the YunaGearOpt style: a wheel of gear round your animated job figure, HP / MP / TP on the bezel and your current gear set.';
 addon.link    = 'https://github.com/YunasXI/yunaequip';
 
@@ -18,7 +18,7 @@ local defaults = T{
     visible = true,
     locked  = false,
     scale   = 1.0,
-    opacity = 1.0,
+    opacity = 0.0,     -- the wheel's background: none (fixed; the setting was removed)
     x       = 200,
     y       = 200,
     flash   = true,    -- the Shadow effect when a piece of gear changes
@@ -43,6 +43,9 @@ local defaults = T{
     set_font = 'bahn',  -- the set name's font (SET_FONTS)
     set_font_v = 1,
     set_color = 'gold',   -- and colour (SET_COLORS)
+    middle  = 'icon',   -- the middle of the wheel: 'art' (the job's artwork), 'icon' (the job icon), 'set' (the gear set's name)
+    middle_v = 1,
+    centre_fx = 'veins', -- the effect between the job icon and the gear (JOBS.FX_LIST)
     art_alpha = 1.0,   -- how solid the artwork in the middle is (0.1 - 1)
     bezel_fx = true,   -- the light gliding along the HP / MP ring and the pulsing level (off = they stand still)
     stat_size = 1.0,   -- the size of the HP / MP / TP text
@@ -102,6 +105,10 @@ end
 
 -- The set name's font is Bahnschrift by default now (the user's pick): switch to it once
 if (tonumber(cfg.set_font_v) or 1) < 2 then cfg.set_font, cfg.set_font_v = 'bahn', 2; settings.save(); end
+
+-- The job icon in the middle and the gear set under the wheel is the default look: switch to it once
+if (tonumber(cfg.middle_v) or 1) < 3 then cfg.middle, cfg.middle_v = 'icon', 3; settings.save(); end
+if cfg.middle ~= 'art' and cfg.middle ~= 'icon' then cfg.middle = 'icon'; settings.save(); end
 
 -- Only Black is left: everyone is on it
 if cfg.disc ~= 'black' then cfg.disc = 'black'; settings.save(); end
@@ -1288,6 +1295,15 @@ end
 JOBS.abbr = { 'WAR', 'MNK', 'WHM', 'BLM', 'RDM', 'THF', 'PLD', 'DRK', 'BST', 'BRD', 'RNG', 'SAM', 'NIN', 'DRG', 'SMN',
               'BLU', 'COR', 'PUP', 'DNC', 'SCH', 'GEO', 'RUN' };
 -- HP / MP / TP read once a frame and eased (shared by every look): returns hp, mp, tp, hp %, mp %
+-- Low HP / MP warning (under 50%): 0 = fine, else a heartbeat pulse 0..1 that beats faster as it gets lower
+function JOBS.low_beat(pct, now, seed)
+    if pct == nil or pct >= 50 or pct <= 0 then return 0; end
+    local speed = 1.0 + 2.2 * (1 - pct / 50);                       -- beats per second
+    local ph = (now * speed + seed) % 1;
+    local b = math.max(math.exp(-((ph - 0.08) / 0.06) ^ 2), 0.6 * math.exp(-((ph - 0.28) / 0.06) ^ 2));   -- lub-dub
+    return b * (0.6 + 0.4 * (1 - pct / 50));
+end
+
 function JOBS.stats()
     local b = JOBS.bars;
     local now = os.clock();
@@ -1310,6 +1326,7 @@ function JOBS.stats()
             if b[lag] then b[lag] = (v >= b[lag]) and v or math.max(v, b[lag] - dt * 0.35); end
         end
     end
+    JOBS.hpp, JOBS.mpp = hpp, mpp;
     return hp, mp, tp, hpp, mpp;
 end
 
@@ -1346,7 +1363,7 @@ end
 -- with ytop). Returns the group's width and height.
 JOBS.badge = { HP = { 0.30, 0.10, 0.12 }, MP = { 0.12, 0.15, 0.32 }, TP = { 0.29, 0.22, 0.08 } };
 JOBS.ink = { HP = { 1.00, 0.45, 0.48 }, MP = { 0.58, 0.68, 1.00 }, TP = { 1.00, 0.82, 0.42 } };
-function JOBS.stat(dl, x, y, ax, label, value, c, fs, bs, ytop, frac)
+function JOBS.stat(dl, x, y, ax, label, value, c, fs, bs, ytop, frac, beat)
     local ss = math.max(0.6, math.min(2.0, tonumber(cfg.stat_size) or 1));
     bs = bs * ss;                                                    -- everything in the group grows with the text
     local pushed = push_font(fonts.semi, math.floor(20 * bs + 0.5));
@@ -1392,6 +1409,12 @@ function JOBS.stat(dl, x, y, ax, label, value, c, fs, bs, ytop, frac)
     for _, o in ipairs({ { 1, 1 }, { -1, 1 }, { 1, -1 }, { -1, -1 }, { 0, 2 } }) do
         dl:AddText({ px_ + o[1], py_ + o[2] }, u32({ 0, 0, 0, 0.6 }), value);
     end
+    if (beat or 0) > 0 then                                         -- low: the number glows in the stat's colour
+        for _, o in ipairs({ { -2, 0 }, { 2, 0 }, { 0, -2 }, { 0, 2 } }) do
+            dl:AddText({ px_ + o[1] * bs, py_ + o[2] * bs }, u32({ c[1], c[2], c[3], 0.35 * beat }), value);
+        end
+        vcol = { vcol[1], vcol[2] * (1 - 0.25 * beat), vcol[3] * (1 - 0.25 * beat), vcol[4] };
+    end
     dl:AddText({ px_, py_ }, u32(vcol), value);
     -- the line under it: dim, and bright as far as the stat is full
     local ly = y1 + bh - 1.5 * bs;
@@ -1425,7 +1448,7 @@ end
 function JOBS.disc_alpha()
     if cfg.disc == 'none' then return 0; end
     local base = ((cfg.disc or 'black') == 'black') and 0.93 or 0.72;
-    return base * math.max(0, math.min(1, tonumber(cfg.opacity) or 1));
+    return 0;                                                      -- no background behind the wheel (the user's choice)
 end
 
 -- Sumi-e: a black disc, red / blue ink splatters, and a big dry-brush ensō round it: its left half is HP (red),
@@ -1439,6 +1462,14 @@ function JOBS.sumi(dl, cx, cy, R, bs, fs)
     local dc = JOBS.disc_col();
     draw_image(dl, bg, x0, y0, x1, y1, nil, { dc[1] * 1.08, dc[2] * 1.08, dc[3] * 1.08, JOBS.disc_alpha() / 0.93 });   -- the disc, in the chosen colour
     if deco then draw_image(dl, deco, x0, y0, x1, y1, 1); end
+    -- a thin black outline that follows the brush ring's own strokes: the ring's pictures in black, nudged a
+    -- little in every direction, behind it
+    for _, tex_ in ipairs({ rl, rr_ }) do
+        for _, d in ipairs({ { -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 }, { -0.7, -0.7 }, { 0.7, 0.7 }, { -0.7, 0.7 }, { 0.7, -0.7 } }) do
+            local o = 1.5 * bs;
+            draw_image(dl, tex_, x0 + d[1] * o, y0 + d[2] * o, x1 + d[1] * o, y1 + d[2] * o, nil, { 0, 0, 0, 0.85 });
+        end
+    end
     local b = JOBS.bars;
     local now = os.clock();
     local top_, bot_ = cy - 1.08 * R, cy + 1.08 * R;                     -- how high the brush ring reaches
@@ -1449,6 +1480,13 @@ function JOBS.sumi(dl, cx, cy, R, bs, fs)
         local tex = (side == 1) and rl or rr_;
         local v, lag = (side == 1) and b.hp or b.mp, (side == 1) and b.hp_lag or b.mp_lag;
         local c = (side == 1) and { 1.00, 0.30, 0.33 } or { 0.38, 0.68, 1.00 };
+        local beat = JOBS.low_beat((side == 1) and JOBS.hpp or JOBS.mpp, now, side * 0.37);
+        if beat > 0 then
+            c = { c[1] + (1 - c[1]) * 0.35 * beat, c[2] + (1 - c[2]) * 0.35 * beat, c[3] + (1 - c[3]) * 0.35 * beat };
+            for k = 1, 4 do                                         -- the whole side flashes with each beat
+                JOBS.arc(dl, cx, cy, 1.02 * R, (side == 1) and 90 or -90, (side == 1) and 270 or 90, u32({ c[1], c[2], c[3], 0.07 * beat }), (6 + k * 5) * bs);
+            end
+        end
         local sx0, sx1 = (side == 1) and x0 or cx, (side == 1) and cx or x1;
         dl:PushClipRect({ x0, y0 }, { x1, ycut }, true);
         draw_image(dl, tex, x0, y0, x1, y1, nil, { 0.55, 0.55, 0.60, 0.28 });         -- the empty brush
@@ -1509,11 +1547,18 @@ function JOBS.neon(dl, cx, cy, R, bs, fs)
     local dc = JOBS.disc_col();
     dl:AddCircleFilled({ cx, cy }, R, u32({ dc[1], dc[2], dc[3], JOBS.disc_alpha() }), 96);
     for i = 1, (cfg.disc == 'none') and 0 or 6 do dl:AddCircle({ cx, cy }, R - i * 2.5 * bs, u32({ 0, 0, 0, 0.10 * (1 - i / 7) }), 96, 2.5 * bs); end
-    dl:AddCircle({ cx, cy }, R * 0.94, u32({ 0.75, 0.75, 0.80, 0.22 }), 128, 1 * bs);   -- the thin inner ring
     local th = 5.5 * bs;                                            -- thick enough to read at a glance
+    dl:AddCircle({ cx, cy }, R, u32({ 0, 0, 0, 0.95 }), 160, th + 3.5 * bs);   -- a black outline round the whole ring
     for side = 1, 2 do
         local v, lag = (side == 1) and b.hp or b.mp, (side == 1) and b.hp_lag or b.mp_lag;
         local c = (side == 1) and { 1.00, 0.24, 0.30 } or { 0.30, 0.58, 1.00 };
+        local beat = JOBS.low_beat((side == 1) and JOBS.hpp or JOBS.mpp, now, side * 0.37);
+        if beat > 0 then
+            c = { c[1] + (1 - c[1]) * 0.35 * beat, c[2] + (1 - c[2]) * 0.35 * beat, c[3] + (1 - c[3]) * 0.35 * beat };
+            for k = 1, 4 do
+                JOBS.arc(dl, cx, cy, R, (side == 1) and 90 or -90, (side == 1) and 270 or 90, u32({ c[1], c[2], c[3], 0.07 * beat }), (6 + k * 5) * bs);
+            end
+        end
         local cut = JOBS.cut_deg();
         local a1, a2 = (side == 1) and (90 + cut) or (90 - cut), (side == 1) and 270 or -90;   -- from the plaque up its own side
         local dir = (a2 > a1) and 1 or -1;
@@ -1720,14 +1765,375 @@ function JOBS.bahn(dl, x, y, str, px, col, spacing)
     if pushed then imgui.PopFont(); end
     return w, h;
 end
+-- What the gear set is FOR, in a word or two. Only the sets that matter are named: a weapon skill, the spell type
+-- you're casting (from the spell's magic skill), precast, PDT / MDT; otherwise TP when engaged, resting, idle.
+-- Raw profile names (TP_Hybrid_DT, Savage-Acc...) are never shown.
+JOBS.SPELL_KIND = { [32] = 'DIVINE', [33] = 'HEALING', [34] = 'ENHANCING', [35] = 'ENFEEBLING', [36] = 'NUKE', [37] = 'DARK MAGIC',
+    [38] = 'SUMMONING', [39] = 'NINJUTSU', [40] = 'SONG', [41] = 'SONG', [42] = 'SONG', [43] = 'BLUE MAGIC', [44] = 'GEOMANCY', [45] = 'GEOMANCY' };
+function JOBS.set_label(status)
+    local now = os.clock();
+    local ok, name = pcall(JOBS.current_set);
+    local n = ((ok and name) or ''):lower();
+    if n:find('precast') or n:find('fastcast') or n:find('^fc') or n:find('preshot') or n:find('fast cast') then return 'PRECAST'; end
+    if ye.ws_t and now - ye.ws_t < 2.0 then return 'WEAPON SKILL'; end
+    if (now < (ye.cast_until or 0) or (ye.spell_t and now - ye.spell_t < 1.5)) and ye.spell then
+        local kind;
+        pcall(function()
+            local sp = AshitaCore:GetResourceManager():GetSpellById(ye.spell);
+            if sp then
+                kind = JOBS.SPELL_KIND[tonumber(sp.Skill) or 0];
+                local sn = ((sp.Name and sp.Name[1]) or ''):lower();
+                if kind == 'HEALING' and (sn:find('cur') or sn:find('cura')) then kind = 'CURE'; end
+                if kind == 'SONG' and ye.job_key == 'brd' then
+                    if sn:find('requiem') or sn:find('lullaby') or sn:find('elegy') or sn:find('threnody') or sn:find('finale') or sn:find('nocturne') or sn:find('virelai') then kind = 'SONG DEBUFF'; else kind = 'SONG BUFF'; end
+                end
+            end
+        end);
+        if kind then return kind; end
+    end
+    if n:find('mdt') or n:find('magicdefense') then return 'MDT'; end
+    if n:find('pdt') or n:find('physicaldefense') then return 'PDT'; end
+    if status == 'Engaged' then return 'TP'; end
+    if status == 'Resting' then return 'RESTING'; end
+    if n == '' and JOBS.sets == nil then return 'NO GEAR PROFILE'; end
+    return 'IDLE';
+end
+
+-- Veins from the job icon to each piece of gear: a slightly crooked line per slot (fixed shape) with two thin
+-- side branches, a faint steady glow, and a bright pulse that runs out from the icon to the gear (each slot on
+-- its own beat), so energy seems to flow from the job into the equipment
+JOBS.VEIN = nil;
+function JOBS.veins(dl, cx, cy, r0, r1, c, bs, now)
+    if JOBS.VEIN == nil then
+        JOBS.VEIN = {};
+        for j, o in ipairs(ORBIT) do
+            local pts, n = {}, 22;                                  -- a smooth, gently winding curve (like a vein)
+            local amp = 5 + 4 * ((j * 0.618) % 1);
+            local sd = j * 1.7;
+            for q = 0, n do
+                local t = q / n;
+                pts[#pts + 1] = { t, amp * (math.sin(t * math.pi * 1.6 + sd) * 0.7 + math.sin(t * math.pi * 3.1 + sd * 2) * 0.3) };
+            end
+            local br = {};
+            for b = 1, 2 do
+                local t0 = 0.35 + 0.3 * ((j * 0.618 + b * 0.37) % 1);
+                br[b] = { t0 = t0, side = (b == 1) and 1 or -1, len = 0.18 + 0.1 * ((j * 0.31 + b) % 1) };
+            end
+            JOBS.VEIN[j] = { a = math.rad(o[2]), pts = pts, br = br, ph = (j * 0.137) % 1 };
+        end
+    end
+    local function at(v, t, off)
+        local a = v.a + math.rad(off or 0);
+        local r = r0 + (r1 - r0) * t;
+        return { cx + math.cos(a) * r, cy + math.sin(a) * r };
+    end
+    for _, v in ipairs(JOBS.VEIN) do
+        local ph = (now * 0.55 + v.ph) % 1;                         -- where the pulse is along this vein
+        local prev = nil;
+        for q, p in ipairs(v.pts) do
+            local pt = at(v, p[1], p[2] * math.sin(p[1] * math.pi));   -- crooked in the middle, straight at both ends
+            if prev then
+                local tm = (p[1] + v.pts[q - 1][1]) / 2;
+                local glow = math.max(0, 1 - math.abs(tm - ph) / 0.16);
+                local base = 0.14 * (1 - tm * 0.4);
+                dl:AddLine(prev, pt, u32({ c[1], c[2], c[3], (0.08 + 0.25 * glow) }), (3.5 + 3 * glow) * bs);
+                dl:AddLine(prev, pt, u32({ c[1] + (1 - c[1]) * 0.5 * glow, c[2] + (1 - c[2]) * 0.5 * glow, c[3] + (1 - c[3]) * 0.5 * glow, base + 0.7 * glow }), (1.0 + 0.8 * glow) * bs);
+            end
+            prev = pt;
+        end
+        for _, b in ipairs(v.br) do                                 -- the side branches
+            local s0 = at(v, b.t0, 0);
+            local s1 = at(v, b.t0 + b.len, b.side * 9);
+            local glow = math.max(0, 1 - math.abs(b.t0 - ph) / 0.2);
+            dl:AddLine(s0, s1, u32({ c[1], c[2], c[3], 0.12 + 0.35 * glow }), (0.8 + 0.5 * glow) * bs);
+        end
+        local tip = at(v, 1, 0);                                    -- the pulse lands on the gear: a small flash
+        local land = math.max(0, 1 - math.abs(ph - 0.97) / 0.06);
+        if land > 0 then dl:AddCircleFilled(tip, (3 + 3 * land) * bs, u32({ c[1], c[2], c[3], 0.35 * land }), 16); end
+    end
+end
+
+-- The effects between the job icon and the gear, all in the job's colour. Pick one in the settings ("Effect").
+JOBS.FX_LIST = { { 'veins', 'Veins' }, { 'waves', 'Waves' }, { 'bolts', 'Thunderbolts' }, { 'sound', 'Sound wave' },
+    { 'sparks', 'Orbiting sparks' }, { 'stars', 'Constellation' }, { 'runes', 'Rune circle' }, { 'none', 'None' } };
+function JOBS.fx(name, dl, cx, cy, r0, r1, c, bs, now)
+    local function slot(j) local a = math.rad(ORBIT[j][2]); return { cx + math.cos(a) * r1, cy + math.sin(a) * r1 }, a; end
+    if name == 'veins' then return JOBS.veins(dl, cx, cy, r0, r1, c, bs, now); end
+    if name == 'waves' then
+        -- soft gradient rings rising out of the icon and spreading to the gear, fading as they go
+        for k = 0, 3 do
+            local t = ((now * 0.35) + k / 4) % 1;
+            local rr = r0 + (r1 - r0) * t;
+            local al = math.sin(t * math.pi) * 0.5;
+            for q = 1, 4 do
+                dl:AddCircle({ cx, cy }, rr - q * 2 * bs, u32({ c[1], c[2], c[3], al * (0.35 - q * 0.07) }), 96, 3 * bs);
+            end
+            dl:AddCircle({ cx, cy }, rr, u32({ c[1] + (1 - c[1]) * 0.4, c[2] + (1 - c[2]) * 0.4, c[3] + (1 - c[3]) * 0.4, al }), 96, 1.4 * bs);
+        end
+        return;
+    end
+    if name == 'bolts' then
+        -- a lightning bolt jumps from one piece of gear to the next round the ring, every ~0.35 s
+        local n = #ORBIT;
+        local step = math.floor(now / 0.35);
+        for back = 0, 2 do                                       -- the latest bolt and two fading ones
+            local st = step - back;
+            local j = (st * 5) % n + 1;                          -- hops around the ring (skipping a few)
+            local k2 = (j + 1 + (st % 3)) % n + 1;
+            local p1, p2 = slot(j), slot(k2);
+            local age = (now / 0.35 - st);
+            local al = math.max(0, 1 - (age + back) / 3);
+            if al > 0.02 then
+                local pts = { p1 };
+                local seg = 8;
+                for q = 1, seg - 1 do
+                    local t = q / seg;
+                    local x = p1[1] + (p2[1] - p1[1]) * t; local y = p1[2] + (p2[2] - p1[2]) * t;
+                    local jit = (math.sin(st * 91.7 + q * 37.3 + math.floor(now * 20) * 1.3) * 0.5) * 22 * bs * math.sin(t * math.pi);
+                    local nx, ny = -(p2[2] - p1[2]), p2[1] - p1[1];
+                    local L = math.max(1, math.sqrt(nx * nx + ny * ny));
+                    pts[#pts + 1] = { x + nx / L * jit, y + ny / L * jit };
+                end
+                pts[#pts + 1] = p2;
+                for q = 1, #pts - 1 do
+                    dl:AddLine(pts[q], pts[q + 1], u32({ c[1], c[2], c[3], 0.25 * al }), 6 * bs);
+                    dl:AddLine(pts[q], pts[q + 1], u32({ 1, 1, 1, 0.9 * al }), 1.4 * bs);
+                end
+                dl:AddCircleFilled(p2, 7 * bs * al, u32({ c[1], c[2], c[3], 0.35 * al }), 16);
+            end
+        end
+        return;
+    end
+    if name == 'sound' then
+        -- an equaliser ring: bars round the icon that rise and fall like music, plus a wavy ring
+        local N = 48;
+        for q = 0, N - 1 do
+            local a = q / N * math.pi * 2;
+            local v = 0.5 + 0.25 * math.sin(now * 3.1 + q * 0.7) + 0.25 * math.sin(now * 5.3 + q * 1.9);
+            local len = (r1 - r0) * (0.12 + 0.35 * v);
+            local p1 = { cx + math.cos(a) * r0 * 1.05, cy + math.sin(a) * r0 * 1.05 };
+            local p2 = { cx + math.cos(a) * (r0 * 1.05 + len), cy + math.sin(a) * (r0 * 1.05 + len) };
+            dl:AddLine(p1, p2, u32({ c[1], c[2], c[3], 0.25 + 0.45 * v }), 2.2 * bs);
+        end
+        local prev;
+        for q = 0, 96 do
+            local a = q / 96 * math.pi * 2;
+            local rr = r0 + (r1 - r0) * 0.72 + math.sin(a * 8 + now * 4) * 4 * bs * (0.6 + 0.4 * math.sin(now * 1.7));
+            local pt = { cx + math.cos(a) * rr, cy + math.sin(a) * rr };
+            if prev then dl:AddLine(prev, pt, u32({ c[1], c[2], c[3], 0.45 }), 1.3 * bs); end
+            prev = pt;
+        end
+        return;
+    end
+    if name == 'sparks' then
+        -- glowing sparks orbiting the icon at different speeds and distances, leaving short trails
+        for k = 1, 18 do
+            local rr = r0 + (r1 - r0) * (0.15 + 0.75 * ((k * 0.618) % 1));
+            local sp = (0.25 + 0.5 * ((k * 0.377) % 1)) * ((k % 2 == 0) and 1 or -1);
+            for tr = 0, 5 do
+                local a = now * sp + k * 2.4 - tr * 0.05 * (sp > 0 and 1 or -1);
+                local pt = { cx + math.cos(a) * rr, cy + math.sin(a) * rr };
+                local al = (1 - tr / 6) * (0.6 + 0.4 * math.sin(now * 3 + k));
+                dl:AddCircleFilled(pt, (2.2 - tr * 0.3) * bs, u32({ c[1], c[2], c[3], 0.8 * al }), 8);
+            end
+        end
+        return;
+    end
+    if name == 'stars' then
+        -- a constellation: thin lines linking the gear to the icon and to each other, twinkling star points on them
+        local n = #ORBIT;
+        for j = 1, n do
+            local p1 = slot(j);
+            local p2 = slot(j % n + 1);
+            local mid = { cx + (p1[1] - cx) * 0.45, cy + (p1[2] - cy) * 0.45 };
+            dl:AddLine(p1, p2, u32({ c[1], c[2], c[3], 0.22 }), 1 * bs);
+            dl:AddLine(mid, p1, u32({ c[1], c[2], c[3], 0.15 }), 1 * bs);
+            if j % 2 == 0 then dl:AddLine(mid, slot((j + 3) % n + 1), u32({ c[1], c[2], c[3], 0.12 }), 1 * bs); end
+            local tw = 0.5 + 0.5 * math.sin(now * 2.3 + j * 1.7);
+            dl:AddCircleFilled(mid, (1.5 + 1.5 * tw) * bs, u32({ 1, 1, 1, 0.5 + 0.5 * tw }), 8);
+            dl:AddCircleFilled(mid, (4 + 3 * tw) * bs, u32({ c[1], c[2], c[3], 0.15 * tw }), 12);
+        end
+        return;
+    end
+    if name == 'runes' then
+        -- a magic circle: two rings turning opposite ways with marks on them, and a star drawn between them
+        local ra, rb = r0 + (r1 - r0) * 0.45, r0 + (r1 - r0) * 0.80;
+        for _, rr in ipairs({ ra, rb }) do
+            dl:AddCircle({ cx, cy }, rr, u32({ c[1], c[2], c[3], 0.45 }), 96, 1.3 * bs);
+        end
+        for q = 0, 23 do
+            local a = q / 24 * math.pi * 2 + now * 0.2;
+            local p1 = { cx + math.cos(a) * (rb - 4 * bs), cy + math.sin(a) * (rb - 4 * bs) };
+            local p2 = { cx + math.cos(a) * (rb + 4 * bs), cy + math.sin(a) * (rb + 4 * bs) };
+            dl:AddLine(p1, p2, u32({ c[1], c[2], c[3], (q % 3 == 0) and 0.8 or 0.35 }), 1.3 * bs);
+        end
+        local star = {};
+        for q = 0, 5 do
+            local a = q / 6 * math.pi * 2 - now * 0.3;
+            star[#star + 1] = { cx + math.cos(a) * ra, cy + math.sin(a) * ra };
+        end
+        for q = 1, 6 do
+            dl:AddLine(star[q], star[(q + 1) % 6 + 1], u32({ c[1], c[2], c[3], 0.35 + 0.15 * math.sin(now * 2 + q) }), 1.2 * bs);
+        end
+        return;
+    end
+end
+
+-- The job icon's colours, per job: two shades it drifts between (and a white edge for the dark ones)
+JOBS.ICON_COL = {
+    mnk = { { 1.00, 0.82, 0.30 }, { 1.00, 0.93, 0.55 } },          -- yellowish
+    whm = { { 0.62, 0.88, 1.00 }, { 0.85, 0.97, 1.00 } },          -- light azure
+    nin = { { 0.06, 0.06, 0.08 }, { 0.20, 0.18, 0.24 }, true },    -- black, with a white edge
+    drg = { { 0.20, 0.42, 1.00 }, { 0.40, 0.62, 1.00 } },          -- blue
+    war = { { 0.55, 0.33, 0.16 }, { 0.75, 0.50, 0.28 } },          -- brown
+    pld = { { 1.00, 0.78, 0.25 }, { 1.00, 0.92, 0.55 } },          -- gold
+    blm = { { 0.32, 0.12, 0.55 }, { 0.48, 0.25, 0.75 } },          -- dark violet
+    rdm = { { 0.95, 0.22, 0.18 }, { 1.00, 0.52, 0.18 } },          -- red / orange
+    rng = { { 0.12, 0.42, 0.18 }, { 0.25, 0.58, 0.28 } },          -- dark green
+    thf = { { 0.55, 0.85, 0.25 }, { 0.75, 0.95, 0.45 } },          -- lime
+    drk = { { 0.55, 0.05, 0.10 }, { 0.80, 0.12, 0.18 } },          -- blood red
+    bst = { { 0.85, 0.55, 0.20 }, { 1.00, 0.72, 0.35 } },          -- amber
+    brd = { { 0.25, 0.85, 0.80 }, { 0.55, 1.00, 0.92 } },          -- teal
+    sam = { { 0.85, 0.15, 0.20 }, { 1.00, 0.42, 0.42 } },          -- crimson
+    smn = { { 0.65, 0.30, 0.95 }, { 0.85, 0.55, 1.00 } },          -- amethyst
+    blu = { { 0.15, 0.45, 0.95 }, { 0.30, 0.85, 0.95 } },          -- deep blue to cyan
+    cor = { { 0.85, 0.65, 0.20 }, { 0.30, 0.55, 1.00 } },          -- gold and navy
+    pup = { { 0.85, 0.40, 0.25 }, { 1.00, 0.65, 0.45 } },          -- copper
+    dnc = { { 1.00, 0.45, 0.72 }, { 1.00, 0.70, 0.85 } },          -- pink
+    sch = { { 0.95, 0.85, 0.55 }, { 0.55, 0.40, 0.25 } },          -- parchment and ink
+    geo = { { 0.30, 0.85, 0.65 }, { 0.55, 1.00, 0.80 } },          -- jade
+    run = { { 0.40, 0.65, 1.00 }, { 0.70, 0.90, 1.00 } },          -- ice blue
+};
+
+-- (old) The job icon in the middle: it rises out of a light purple smoke, stays a while with wisps drifting round it,
+-- then dissolves back into the smoke and forms again (a 12 s cycle; a new cycle starts when the job changes)
+JOBS.SMOKE = {};
+for k = 1, 22 do
+    JOBS.SMOKE[k] = { a = (k * 2.39996) % (math.pi * 2), d = 0.35 + 0.45 * ((k * 0.618) % 1), s = 0.25 + 0.2 * ((k * 0.377) % 1), ph = (k * 0.271) % 1 };
+end
+function JOBS.icon_smoke(dl, ic, cx, cy, half, bs, now, jab)
+    -- the job's emblem, always there (no ring, no smoke), in the job's colours, glowing: a soft halo that swells
+    -- and fades, the emblem brightening with it
+    local jc = JOBS.ICON_COL[jab:lower()] or { { C.gold[1], C.gold[2], C.gold[3] }, { C.ice[1], C.ice[2], C.ice[3] } };
+    local A_, B_ = jc[1], jc[2];
+    local u = 0.5 + 0.5 * math.sin(now * 1.1);
+    local col = { A_[1] + (B_[1] - A_[1]) * u, A_[2] + (B_[2] - A_[2]) * u, A_[3] + (B_[3] - A_[3]) * u };
+    local dark = (0.299 * col[1] + 0.587 * col[2] + 0.114 * col[3]) < 0.15;
+    local light = (jab:lower() == 'whm');                          -- (the new art is dark ink, except White Mage's pale one)
+    local glow = dark and { 0.85, 0.85, 0.92 } or col;
+    local g = 0.5 + 0.5 * math.sin(now * 2.0);                     -- the glow's beat
+    local sym = logo_texture('jobicons/' .. jab:lower() .. '_sym.png') or ic;
+    local h = half * 0.90;                                         -- (the user's ink art fills its picture)
+    -- no glow outside: just the outline, then the emblem filled with a gradient of the job's two colours
+    -- (top to bottom), and a soft band of light that slowly rises through it
+    -- the picture made at the size nearest to the one it's drawn at (outline baked in), so it stays sharp
+    local want = 2 * h;
+    local best;
+    for _, P in ipairs({ 48, 64, 80, 96, 128, 160, 200 }) do
+        if best == nil and P >= want * 0.95 then best = P; end
+    end
+    sym = logo_texture('jobicons/' .. jab:lower() .. '_sym_' .. (best or 200) .. '.png') or sym;
+    local x1_, y1_ = math.floor(cx - h + 0.5), math.floor(cy - h + 0.5);
+    local sz = math.floor(2 * h + 0.5);
+    cx, cy, h = x1_ + sz / 2, y1_ + sz / 2, sz / 2;                -- on whole pixels
+    -- the user's ink art keeps its own colours; a soft band of light slowly rises through it (inside the art only)
+    draw_image(dl, sym, cx - h, cy - h, cx + h, cy + h, 1);
+    local y0, y1 = cy - h, cy + h;
+    local N = 12;
+    local shine = (now * 0.25) % 1.4 - 0.2;                         -- 1 = top, 0 = bottom
+    for q = 0, N - 1 do
+        local f = (q + 0.5) / N;
+        local sh = math.max(0, 1 - math.abs((1 - f) - shine) / 0.16);
+        if sh > 0.01 then
+            dl:PushClipRect({ cx - h, y0 + (y1 - y0) * q / N }, { cx + h, y0 + (y1 - y0) * (q + 1) / N + 0.5 }, true);
+            draw_image(dl, sym, cx - h, cy - h, cx + h, cy + h, nil, { col[1] + (1 - col[1]) * 0.5, col[2] + (1 - col[2]) * 0.5, col[3] + (1 - col[3]) * 0.5, 0.45 * sh });
+            dl:PopClipRect();
+        end
+    end
+end
+
+-- The set's name in the MIDDLE of the wheel (the "Middle: Gear set" option): the old word fades out drifting up,
+-- the new one fades in rising from below, with a soft glow of your job's colour that breathes behind it
+function JOBS.mid_label(dl, cx, cy, half, bs, fs, label, jkey)
+    local now = os.clock();
+    if JOBS.mid_cur ~= label then
+        JOBS.mid_prev, JOBS.mid_cur, JOBS.mid_t = JOBS.mid_cur, label, now;
+    end
+    local t = math.min(1, (now - (JOBS.mid_t or -9)) / 0.45);
+    local e = t * t * (3 - 2 * t);
+    local jc = (jkey and JOBS.color[jkey]) or { 0.6, 0.66, 1 };
+    local breathe = 0.5 + 0.5 * math.sin(now * 1.6);
+    for k = 1, 8 do
+        dl:AddCircleFilled({ cx, cy }, half * (0.95 - k * 0.09), u32({ jc[1], jc[2], jc[3], (0.025 + 0.015 * breathe) * (0.6 + 0.4 * e) }), 48);
+    end
+    local f = fonts.set[cfg.set_font or 'bahn'] or fonts.set.bahn;
+    local function word(str, a, dy, sc)
+        if str == nil or a <= 0.01 then return; end
+        local px_ = 34 * bs * sc;
+        local pushed = push_font(f, math.floor(px_ + 0.5));
+        local new = pushed and f.LegacySize ~= nil;
+        local base = pushed and (new and 1 or px_ / 26) or (px_ / 17);
+        imgui.SetWindowFontScale(base);
+        local sp = 3 * bs * sc;                                     -- spaced-out capitals
+        local tw, th = 0, 0;
+        for ch in str:gmatch('.') do local cw, chh = imgui.CalcTextSize(ch); tw = tw + cw + sp; th = chh; end
+        tw = tw - sp;
+        if tw > half * 1.7 then
+            local k = half * 1.7 / tw;
+            imgui.SetWindowFontScale(base * k); sp = sp * k;
+            tw = 0; for ch in str:gmatch('.') do local cw, chh = imgui.CalcTextSize(ch); tw = tw + cw + sp; th = chh; end
+            tw = tw - sp;
+        end
+        local tx, ty = cx - tw / 2, cy - th / 2 + dy;
+        local w = 0.35 * (1 - e) * a;                               -- a little brighter as it arrives
+        local sweep = ((now * 0.35) % 1.6) - 0.3;                   -- a light that sweeps across now and then
+        local x = tx;
+        for ch in str:gmatch('.') do
+            local cw = imgui.CalcTextSize(ch);
+            local u = (x - tx) / math.max(1, tw);
+            local shine = math.max(0, 1 - math.abs(u - sweep) / 0.12);
+            for _, o in ipairs({ { 1, 1 }, { -1, 1 }, { 1, -1 }, { -1, -1 }, { 0, 2 } }) do
+                dl:AddText({ x + o[1], ty + o[2] }, u32({ 0, 0, 0, 0.85 * a }), ch);
+            end
+            for _, o in ipairs({ { -2, 0 }, { 2, 0 }, { 0, -2 }, { 0, 2 } }) do  -- a soft glow of the job's colour
+                dl:AddText({ x + o[1] * bs, ty + o[2] * bs }, u32({ jc[1], jc[2], jc[3], 0.16 * a }), ch);
+            end
+            local m = 0.30 * (1 - u);                               -- white on the left, taking the job's colour to the right
+            local c = { 1 - m * (1 - jc[1]) * 0.4, 1 - m * (1 - jc[2]) * 0.4 - 0.1 * w, 1 - m * (1 - jc[3]) * 0.4 - 0.3 * w, a };
+            c = { c[1] + (1 - c[1]) * shine, c[2] + (1 - c[2]) * shine, c[3] + (1 - c[3]) * shine, a };
+            dl:AddText({ x, ty }, u32(c), ch);
+            x = x + cw + sp;
+        end
+        -- a thin line under it in the job's colour, fading at both ends
+        local ly = ty + th + 4 * bs;
+        for q = 0, 9 do
+            local f1, f2 = q / 10, (q + 1) / 10;
+            local al = math.sin((f1 + 0.05) * math.pi) * 0.7 * a;
+            dl:AddLine({ cx - tw * 0.4 + tw * 0.8 * f1, ly }, { cx - tw * 0.4 + tw * 0.8 * f2, ly }, u32({ jc[1], jc[2], jc[3], al }), 1.5 * bs);
+        end
+        if pushed then imgui.PopFont(); end
+    end
+    word(JOBS.mid_prev, 1 - e, -12 * bs * e, 1 - 0.08 * e);
+    word(JOBS.mid_cur, e * (0.9 + 0.1 * breathe), 12 * bs * (1 - e), 1.06 - 0.06 * e);
+    imgui.SetWindowFontScale(fs);
+end
+
 -- Under the wheel: the gear set you're wearing. A small grey header, the name in Bahnschrift, and under it a red
 -- line, a small gold diamond and a blue line. The name lights up for a moment when the set changes.
-function JOBS.title(dl, cx, cy, R, bs, fs)
+function JOBS.title(dl, cx, cy, R, bs, fs, status)
+    if cfg.middle == 'set' then                                     -- the set's name is in the middle: the job icon sits here
+        local jab = nil;
+        pcall(function() jab = JOBS.abbr[AshitaCore:GetMemoryManager():GetPlayer():GetMainJob()]; end);
+        local ic = jab and logo_texture('jobicons/' .. jab:lower() .. '.png') or nil;
+        if ic then
+            local h = R * 0.24;
+            JOBS.icon_smoke(dl, ic, cx, cy + R + h * 0.55, h, bs, os.clock(), jab);
+        end
+        return;
+    end
     if (cfg.bottom or 'set') == 'off' then return; end
     local now = os.clock();
-    local ok, name, full = pcall(JOBS.current_set);
-    local label = (ok and name and name ~= '') and ((full and '' or '~ ') .. name) or 'no gear profile';
-    label = label:upper();
+    local label = JOBS.set_label(status);
     if JOBS.crest_sig ~= label then
         if JOBS.crest_sig ~= nil then JOBS.crest_t = now; end
         JOBS.crest_sig = label;
@@ -1761,12 +2167,14 @@ end
 function JOBS.overlay(dl, cx, cy, R, bs, fs, theme)
     local hp, mp, tp = JOBS.last_hp or 0, JOBS.last_mp or 0, JOBS.last_tp or 0;
     local b = JOBS.bars;
-    JOBS.title(dl, cx, cy, R, bs, fs);
+    JOBS.title(dl, cx, cy, R, bs, fs, JOBS.status);
     local hpc, mpc = { 0.95, 0.30, 0.34, 1 }, { 0.40, 0.64, 1.00, 1 };
     local tpc = tp >= 1000 and { 1.00, 0.84, 0.36, 1 } or { 0.88, 0.70, 0.30, 1 };
     -- HP on the left and MP on the right, outside the ring at mid height: the ring itself shows how full they are
-    JOBS.stat(dl, cx - R * 1.10, cy, -1, 'HP', tostring(hp), hpc, fs, bs, nil, b.hp);
-    JOBS.stat(dl, cx + R * 1.10, cy, 1, 'MP', tostring(mp), mpc, fs, bs, nil, b.mp);
+    local now_ = os.clock();
+    local hb, mb = JOBS.low_beat(JOBS.hpp, now_, 0.37), JOBS.low_beat(JOBS.mpp, now_, 0.74);
+    JOBS.stat(dl, cx - R * 1.10, cy, -1, 'HP', tostring(hp), hpc, fs, bs * (1 + 0.10 * hb), nil, b.hp, hb);
+    JOBS.stat(dl, cx + R * 1.10, cy, 1, 'MP', tostring(mp), mpc, fs, bs * (1 + 0.10 * mb), nil, b.mp, mb);
     -- TP in the middle at the bottom: a small gold notch, the label, the value, and short gold lines either side
     -- TP above the wheel (the job pill is underneath)
     local ss = math.max(0.6, math.min(2.0, tonumber(cfg.stat_size) or 1));
@@ -2076,8 +2484,28 @@ local function draw_card(status)
             -- (only the hilt shows); when you engage it slides out of the hilt with a glint, and blood starts to drip.
             -- Engaged, the samurai also turns blood red and pulses with the border, glowing along his own outline.
             ART.on, ART.a = true, math.max(0.1, math.min(1, tonumber(cfg.art_alpha) or 1));
+            JOBS.status = status;
+            ye.job_key = jkey;
             local jdone = false;
-            if jkey then
+            local mid = cfg.middle or 'art';
+            local jab = nil;
+            pcall(function() jab = JOBS.abbr[AshitaCore:GetMemoryManager():GetPlayer():GetMainJob()]; end);
+            if mid == 'icon' and jab then                           -- the job icon, coming and going in purple smoke
+                local ic = logo_texture('jobicons/' .. jab:lower() .. '.png');
+                if ic then
+                    local half = (ring_r - RT / 2 - 6 * bs) * 0.48;     -- smaller than before
+                    if cfg.ripple and ye.ripple_t then
+                        local ra = now - ye.ripple_t;
+                        if ra > 0 and ra < 0.45 then half = half * (1 + 0.08 * math.sin(ra / 0.45 * math.pi)); end
+                    end
+                    JOBS.icon_smoke(dl, ic, ccx, ccy, half, bs, now, jab);
+                    jdone = true;
+                end
+            elseif mid == 'set' then
+                JOBS.mid_label(dl, ccx, ccy, ring_r - RT / 2 - 6 * bs, bs, fs, JOBS.set_label(status), jkey or (jab and jab:lower()));
+                jdone = true;
+            end
+            if jkey and mid == 'art' then
                 local half = (ring_r - RT / 2 - 6 * bs) * 0.74;
                 local flash = 0;
                 if cfg.ripple and ye.ripple_t then
@@ -2099,7 +2527,7 @@ local function draw_card(status)
             local body, blade, hilt = logo_texture('logo_body.png'), logo_texture('logo_blade.png'), logo_texture('logo_hilt.png');
             local full = (body == nil or blade == nil or hilt == nil) and logo_texture('logo.png') or nil;
             if full then body, blade, hilt = nil, nil, nil; end
-            if not jdone and (body or full) then
+            if not jdone and mid == 'art' and (body or full) then
                 local half = (ring_r - RT / 2 - 6 * bs) * 0.74;      -- filling the space inside the ring
                 if cfg.ripple and ye.ripple_t then
                     local ra = now - ye.ripple_t;
@@ -2190,6 +2618,22 @@ local function draw_card(status)
             ui.menu = not ui.menu;
             ui.menu_pos = { ox + win + 6, oy };
         end
+
+        -- keep it on screen whatever the resolution: the window has a wide see-through margin round the wheel, so
+        -- it may hang off the edges, but the wheel itself (and a bit of room for TP / the set name) always stays
+        -- inside the game window. This also brings it back if it was saved on a bigger screen.
+        pcall(function()
+            local io = imgui.GetIO();
+            local dw, dh = io.DisplaySize.x, io.DisplaySize.y;
+            if dw and dh and dw > 100 and dh > 100 then
+                local px, py = imgui.GetWindowPos();
+                local kx, ky = cx1 - px, cy1 - py;                  -- where the wheel starts inside the window
+                local keep = math.floor(28 * bs);                   -- room kept for TP above / the set name below
+                local nx = math.max(-kx, math.min(dw - kx - card_w, px));
+                local ny = math.max(-ky + keep, math.min(dh - ky - card_h - keep, py));
+                if math.abs(nx - px) > 0.5 or math.abs(ny - py) > 0.5 then imgui.SetWindowPos({ nx, ny }); end
+            end
+        end);
 
         -- remember where it was dragged to (saved once the mouse is let go)
         local wx, wy = imgui.GetWindowPos();
@@ -2366,7 +2810,6 @@ local function draw_settings()
 
         section('DISPLAY');
         row_switch('##ye_lock', 'Lock position', 'locked', 'On: the card can\'t be dragged.');
-        row_stepper('ye_op', 'Background opacity', 'opacity', 0.1, 0.0, 1.0);
         row_stepper('ye_artop', 'Artwork opacity', 'art_alpha', 0.1, 0.1, 1.0);
         row_switch('##ye_mini', 'Mini mode', 'mini', 'Tiny 16 px icons with tight spacing.\nOff: back to your icon size.');
         row_choice('ye_icon', 'Icon size', string.format('%d px', tonumber(cfg.icon) or 36), function(dir)
@@ -2384,6 +2827,9 @@ local function draw_settings()
                     cfg.bg = step_list({ 'ink', 'glass', 'job', 'none', 'solid' }, cfg.bg or 'ink', dir);
                 end);
             end
+            row_choice('ye_middle', 'Middle', ({ art = 'Artwork', icon = 'Job icon' })[cfg.middle] or 'Job icon', function(dir)
+                cfg.middle = step_list({ 'art', 'icon' }, cfg.middle or 'icon', dir);
+            end);
             row_choice('ye_bottom', 'Under the wheel', ({ set = 'Gear set', off = 'Off' })[cfg.bottom] or 'Gear set', function(dir)
                 cfg.bottom = step_list({ 'set', 'off' }, cfg.bottom or 'set', dir);
             end);
@@ -2455,6 +2901,17 @@ local function on_action(data)
     end
 end
 
+-- Outgoing 0x1A: category 3 = casting a spell (param = spell id), 7 = weapon skill
+ashita.events.register('packet_out', 'ye_packet_out', function(e)
+    if e.id ~= 0x001A then return; end
+    pcall(function()
+        local cat = struct.unpack('H', e.data, 0x0A + 1);
+        local param = struct.unpack('H', e.data, 0x0C + 1);
+        if cat == 3 then ye.spell, ye.spell_t = param, os.clock();
+        elseif cat == 7 then ye.ws_t = os.clock(); end
+    end);
+end);
+
 ashita.events.register('packet_in', 'ye_packet_in', function(e)
     if e.id == 0x0028 then
         pcall(on_action, e.data);
@@ -2475,6 +2932,7 @@ local function help()
     msg('/yequip setname  - the gear set name under the wheel on / off');
     msg('/yequip blm  - Black Mage picture: wizard or warlock');
     msg('/yequip art <10-100>  - how see-through the artwork in the middle is');
+    msg('/yequip middle [art | icon]  - the middle: artwork or job icon');
     msg('/yequip test  - play the Shadow swap effect on every slot');
     msg('/yequip lock | unlock  - stop or allow dragging');
     msg('/yequip mini  - mini mode on / off (16 px icons)');
@@ -2508,6 +2966,11 @@ ashita.events.register('command', 'ye_command', function(e)
         local v = tonumber(args[3]); if v > 1 then v = v / 100; end
         cfg.art_alpha = math.max(0.1, math.min(1, v));
         msg('Artwork opacity: ' .. math.floor(cfg.art_alpha * 100 + 0.5) .. '%');
+    elseif sub == 'middle' or sub == 'centre' or sub == 'center' then
+        local o = { art = 'icon', icon = 'art' };
+        local want = (args[3] or ''):lower();
+        cfg.middle = (o[want] ~= nil) and want or (o[cfg.middle] or 'icon');
+        msg('Middle: ' .. cfg.middle .. '   (art, icon)');
     elseif sub == 'pulse' then
         cfg.bezel_fx = not cfg.bezel_fx;
         msg('Bezel animation ' .. (cfg.bezel_fx and 'on.' or 'off.'));

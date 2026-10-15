@@ -4,7 +4,7 @@ Your equipment on screen for **CatsEyeXI** (Ashita v4 and VanaCore), in the same
 
 - **A wheel of gear** round an animated figure of your job. Every job has its own picture; melee jobs draw their weapon when you engage and put it away when you disengage, and the energy round the figure glows when you engage or cast.
 - **HP and MP on the bezel**: the ring's left half is your HP (red), the right half your MP (blue), filling from the bottom up, with a soft light gliding along them. TP sits above the wheel and pulses gold once you can weapon skill.
-- **Your current gear set** under the wheel, read from your LegacyAC XML or LuAshitacast profile for the job you're on. It lights up when the set changes, which helps when you're checking your gear swaps.
+- **What your gear is set for**, under the wheel: TP when engaged, WEAPON SKILL, PRECAST, CURE, ENHANCING, ENFEEBLING, NUKE, SONG BUFF / DEBUFF (Bard), PDT, MDT, RESTING or IDLE. It follows your LegacyAC / LuAshitacast profile and the spell you're casting, and never shows long raw set names like TP_Hybrid_DT.
 - **Sharp icons** at any size, a white ring on HQ / +1 items, and a dark Shadow effect in a slot when its piece changes.
 - **Two looks** for the wheel: Sumi-e (ink brush ring) and Neon (glowing ring). Or the classic grid card instead of the wheel.
 
@@ -29,6 +29,7 @@ Your equipment on screen for **CatsEyeXI** (Ashita v4 and VanaCore), in the same
 | `/ye setname` | The gear set name under the wheel on or off |
 | `/ye blm` | Black Mage picture: wizard or warlock |
 | `/ye art <10-100>` | Artwork opacity: how see-through the figure in the middle is |
+| `/ye middle [art \| icon]` | The middle of the wheel: your job's artwork or its job icon |
 | `/ye test` | Play the Shadow swap effect on every slot |
 | `/ye lock` / `unlock` | Stop or allow dragging |
 | `/ye mini` | Mini mode (16 px icons) |
