@@ -1,6 +1,6 @@
 addon.name    = 'yunaequip';
 addon.author  = 'Yunas';
-addon.version = '1.0.3';
+addon.version = '1.0.4';
 addon.desc    = 'Your equipment on screen in the YunaGearOpt style: a wheel of gear round your animated job figure, HP / MP / TP on the bezel and your current gear set.';
 addon.link    = 'https://github.com/YunasXI/yunaequip';
 
@@ -2945,6 +2945,27 @@ local function draw_settings()
         if imgui.IsItemHovered() then imgui.SetTooltip('Plays the swap effect on every slot.'); end
         imgui.SameLine(x0 + ROW_W - 100);
         if imgui.Button('HIDE CARD', { 100, 0 }) then cfg.visible = false; ui.menu = false; save(); msg('Hidden: /yequip to show it again.'); end
+        -- Credits: hover it to see who helped (with a little heart)
+        imgui.Spacing();
+        imgui.TextColored(C.muted, 'Credits');
+        if imgui.IsItemHovered() then
+            imgui.BeginTooltip();
+            imgui.TextColored(C.gold, 'Credits');
+            imgui.Separator();
+            imgui.Text('Carver');
+            imgui.SameLine();
+            local hx, hy = imgui.GetCursorScreenPos();
+            local lh = imgui.GetTextLineHeight();
+            local tdl = imgui.GetWindowDrawList();
+            local r = lh * 0.20;
+            local cxh, cyh = hx + r * 2 + 2, hy + lh * 0.42;
+            local hc = u32({ 1.0, 0.32, 0.42, 1 });
+            tdl:AddCircleFilled({ cxh - r * 0.95, cyh }, r, hc, 16);
+            tdl:AddCircleFilled({ cxh + r * 0.95, cyh }, r, hc, 16);
+            tdl:AddTriangleFilled({ cxh - r * 1.9, cyh + r * 0.25 }, { cxh + r * 1.9, cyh + r * 0.25 }, { cxh, cyh + r * 2.4 }, hc);
+            imgui.Dummy({ r * 4 + 4, lh });
+            imgui.EndTooltip();
+        end
     end
     imgui.End();
     if pushed then imgui.PopFont(); end
