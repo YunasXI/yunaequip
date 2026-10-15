@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version part to increment
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute next version
+        id: version
+        run: |
+          latest=$(git tag --list '[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
+          latest=${latest:-0.0.0}
+          IFS=. read -r major minor patch <<< "$latest"
+          case "${{ inputs.bump }}" in
+            major) major=$((major+1)); minor=0; patch=0 ;;
+            minor) minor=$((minor+1)); patch=0 ;;
+            *)     patch=$((patch+1)) ;;
+          esac
+          if [ "$latest" = "0.0.0" ]; then major=1; minor=0; patch=0; fi
+          echo "previous=$latest" >> "$GITHUB_OUTPUT"
+          echo "version=$major.$minor.$patch" >> "$GITHUB_OUTPUT"
+
+      - name: Package addon
+        run: |
+          mkdir -p dist/yunaequip
+          cp yunaequip.lua README.md dist/yunaequip/
+          sed -i "s/^addon.version *= *'[^']*';/addon.version = '${{ steps.version.outputs.version }}';/" dist/yunaequip/yunaequip.lua
+          cp -r images fonts dist/yunaequip/
+          (cd dist && zip -r "yunaequip-${{ steps.version.outputs.version }}.zip" yunaequip)
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          v="${{ steps.version.outputs.version }}"
+          prev="${{ steps.version.outputs.previous }}"
+          if [ "$prev" != "0.0.0" ]; then notes=$(git log --no-merges --format='- %s' "$prev"..HEAD); fi
+          notes=${notes:-"- First release: a wheel of gear round your animated job figure (melee jobs draw their weapon), HP / MP on the bezel, TP that pulses when you can weapon skill, your current gear set from your LegacyAC / LuAshitacast profile, Sumi-e and Neon looks, sharp icons, HQ rings"}
+          gh release create "$v" "dist/yunaequip-$v.zip" --title "v$v" --target "$GITHUB_SHA" --notes "$notes"
