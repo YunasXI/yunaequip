@@ -32,6 +32,7 @@ Your equipment on screen for **CatsEyeXI** (Ashita v4 and VanaCore), in the same
 | `/ye middle [art \| icon]` | The middle of the wheel: your job's artwork or its job icon |
 | `/ye ring` | The HP / MP ring on or off (off: the gear floats on its own) |
 | `/ye still` | The middle's animation on or off (off: a still icon / artwork, lighter) |
+| `/ye low` | The soft glow when HP or MP is under 50% on or off |
 | `/ye test` | Play the Shadow swap effect on every slot |
 | `/ye lock` / `unlock` | Stop or allow dragging |
 | `/ye mini` | Mini mode (16 px icons) |

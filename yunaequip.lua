@@ -1,6 +1,6 @@
 addon.name    = 'yunaequip';
 addon.author  = 'Yunas';
-addon.version = '1.0.2';
+addon.version = '1.0.3';
 addon.desc    = 'Your equipment on screen in the YunaGearOpt style: a wheel of gear round your animated job figure, HP / MP / TP on the bezel and your current gear set.';
 addon.link    = 'https://github.com/YunasXI/yunaequip';
 
@@ -47,8 +47,9 @@ local defaults = T{
     middle_v = 1,
     centre_fx = 'veins', -- the effect between the job icon and the gear (JOBS.FX_LIST)
     art_alpha = 1.0,   -- how solid the artwork in the middle is (0.1 - 1)
-    show_ring = true,  -- the HP / MP ring round the gear (off = the gear floats on its own)
+    show_ring = false, -- the HP / MP ring round the gear (off = the gear floats on its own; the default look)
     mid_anim = true,   -- the animation of the icon / artwork in the middle (off = still, lighter)
+    low_on  = true,    -- under 50% HP / MP: a soft breathing glow on that side of the ring and on its number
     bezel_fx = true,   -- the light gliding along the HP / MP ring and the pulsing level (off = they stand still)
     stat_size = 1.0,   -- the size of the HP / MP / TP text
     theme   = 'sumi',    -- the Orbit's look: 'classic' (bars on the bezel), 'sumi' (ink brush ring), 'neon' (glowing ring)
@@ -1323,11 +1324,72 @@ JOBS.abbr = { 'WAR', 'MNK', 'WHM', 'BLM', 'RDM', 'THF', 'PLD', 'DRK', 'BST', 'BR
 -- HP / MP / TP read once a frame and eased (shared by every look): returns hp, mp, tp, hp %, mp %
 -- Low HP / MP warning (under 50%): 0 = fine, else a heartbeat pulse 0..1 that beats faster as it gets lower
 function JOBS.low_beat(pct, now, seed)
+    -- a slow, smooth breath (no flashing): about every 3 s at 50%, every 1.8 s when almost empty
     if pct == nil or pct >= 50 or pct <= 0 then return 0; end
-    local speed = 1.0 + 2.2 * (1 - pct / 50);                       -- beats per second
-    local ph = (now * speed + seed) % 1;
-    local b = math.max(math.exp(-((ph - 0.08) / 0.06) ^ 2), 0.6 * math.exp(-((ph - 0.28) / 0.06) ^ 2));   -- lub-dub
-    return b * (0.6 + 0.4 * (1 - pct / 50));
+    local k = 1 - pct / 50;
+    JOBS.lb_ph = JOBS.lb_ph or {};
+    local key = seed;
+    local last = JOBS.lb_t or now;
+    local ph = ((JOBS.lb_ph[key] or 0) + (now - (JOBS.lb_last and JOBS.lb_last[key] or now)) / (3.0 - 1.2 * k)) % 1;
+    JOBS.lb_ph[key] = ph;
+    JOBS.lb_last = JOBS.lb_last or {}; JOBS.lb_last[key] = now;
+    local b = 0.5 - 0.5 * math.cos(ph * math.pi * 2);
+    return b * (0.45 + 0.35 * k);
+end
+
+-- Low HP / MP (under 50%): the look is a setting ("Low HP / MP effect"). Each one does the ring side and the number.
+function JOBS.low_ring(dl, cx, cy, r, bs, now)
+    local fx = (cfg.low_on == false) and 'none' or 'breath';
+    for side = 1, 2 do
+        local L = JOBS.low_side and JOBS.low_side[side];
+        if L and L.pct and L.pct < 50 and L.pct > 0 and fx ~= 'none' and fx ~= 'fade' and fx ~= 'tint' then
+            local c, k = L.c, 1 - L.pct / 50;
+            local function band(f0, f1, al, w)                       -- part of this side (0 = bottom, 1 = top)
+                local a1 = (side == 1) and (90 + 180 * f0) or (90 - 180 * f0);
+                local a2 = (side == 1) and (90 + 180 * f1) or (90 - 180 * f1);
+                JOBS.arc(dl, cx, cy, r, math.min(a1, a2), math.max(a1, a2), u32({ c[1], c[2], c[3], al }), w * bs);
+            end
+            if fx == 'breath' or fx == 'glow' then
+                local b = (fx == 'glow') and (0.7 + 0.3 * L.beat) or L.beat * 1.6;
+                for q = 0, 23 do
+                    local f = q / 24;
+                    local al = (0.22 + 0.18 * k) * b * (1 - f) ^ 1.3;
+                    band(f, f + 1 / 24, al * 0.45, 18);
+                    band(f, f + 1 / 24, al, 9);
+                end
+            elseif fx == 'wave' then                                 -- a bright band rising up the side, again and again
+                local ph = (now * (0.45 + 0.35 * k) + side * 0.5) % 1.2;
+                for q = 0, 23 do
+                    local f = q / 24;
+                    local d = math.max(0, 1 - math.abs(f - ph) / 0.14);
+                    if d > 0 then band(f, f + 1 / 24, 0.55 * d, 10); band(f, f + 1 / 24, 0.25 * d, 20); end
+                end
+            elseif fx == 'ember' then                                -- sparks drifting off the side
+                for e = 1, 10 do
+                    local t = (now * 0.35 + e * 0.173) % 1;
+                    local f = (e * 0.618) % 0.9;
+                    local a = math.rad((side == 1) and (90 + 180 * f) or (90 - 180 * f));
+                    local rr = r + (6 + 26 * t) * bs;
+                    local x, y = cx + math.cos(a) * rr, cy + math.sin(a) * rr - 10 * bs * t;
+                    local al = (1 - t) * (0.5 + 0.4 * k);
+                    dl:AddCircleFilled({ x, y }, (2.4 - 1.4 * t) * bs, u32({ c[1], c[2], c[3], al }), 10);
+                    dl:AddCircleFilled({ x, y }, (5 - 2 * t) * bs, u32({ c[1], c[2], c[3], al * 0.25 }), 12);
+                end
+            end
+        end
+    end
+end
+-- the number's look when low: returns colour, extra glow alpha
+function JOBS.low_text(beat, c, vcol)
+    local fx = (cfg.low_on == false) and 'none' or 'breath';
+    if beat <= 0 or fx == 'none' then return vcol, 0; end
+    if fx == 'tint' then
+        local m = math.min(1, beat * 1.5);
+        return { 1 + (c[1] - 1) * m, 1 + (c[2] - 1) * m, 1 + (c[3] - 1) * m, vcol[4] }, 0.25 * m;
+    elseif fx == 'fade' then
+        return { vcol[1], vcol[2], vcol[3], 1 - 0.6 * math.min(1, beat * 1.5) }, 0;
+    end
+    return vcol, 0.45 * math.min(1, beat * 1.5);
 end
 
 function JOBS.stats()
@@ -1436,11 +1498,12 @@ function JOBS.stat(dl, x, y, ax, label, value, c, fs, bs, ytop, frac, beat)
     for _, o in ipairs({ { 1, 1 }, { -1, 1 }, { 1, -1 }, { -1, -1 }, { 0, 2 } }) do
         dl:AddText({ px_ + o[1], py_ + o[2] }, u32({ 0, 0, 0, 0.6 }), value);
     end
-    if (beat or 0) > 0 then                                         -- low: the number glows in the stat's colour
+    local gl;
+    vcol, gl = JOBS.low_text(beat or 0, c, vcol);                     -- low HP / MP: the chosen effect
+    if gl > 0 then
         for _, o in ipairs({ { -2, 0 }, { 2, 0 }, { 0, -2 }, { 0, 2 } }) do
-            dl:AddText({ px_ + o[1] * bs, py_ + o[2] * bs }, u32({ c[1], c[2], c[3], 0.35 * beat }), value);
+            dl:AddText({ px_ + o[1] * bs, py_ + o[2] * bs }, u32({ c[1], c[2], c[3], gl }), value);
         end
-        vcol = { vcol[1], vcol[2] * (1 - 0.25 * beat), vcol[3] * (1 - 0.25 * beat), vcol[4] };
     end
     dl:AddText({ px_, py_ }, u32(vcol), value);
     -- the line under it: dim, and bright as far as the stat is full
@@ -1508,12 +1571,8 @@ function JOBS.sumi(dl, cx, cy, R, bs, fs)
         local v, lag = (side == 1) and b.hp or b.mp, (side == 1) and b.hp_lag or b.mp_lag;
         local c = (side == 1) and { 1.00, 0.30, 0.33 } or { 0.38, 0.68, 1.00 };
         local beat = JOBS.low_beat((side == 1) and JOBS.hpp or JOBS.mpp, now, side * 0.37);
-        if beat > 0 then
-            c = { c[1] + (1 - c[1]) * 0.35 * beat, c[2] + (1 - c[2]) * 0.35 * beat, c[3] + (1 - c[3]) * 0.35 * beat };
-            for k = 1, 4 do                                         -- the whole side flashes with each beat
-                JOBS.arc(dl, cx, cy, 1.02 * R, (side == 1) and 90 or -90, (side == 1) and 270 or 90, u32({ c[1], c[2], c[3], 0.07 * beat }), (6 + k * 5) * bs);
-            end
-        end
+        JOBS.low_side = JOBS.low_side or {};
+        JOBS.low_side[side] = { c = c, beat = beat, pct = (side == 1) and JOBS.hpp or JOBS.mpp };
         local sx0, sx1 = (side == 1) and x0 or cx, (side == 1) and cx or x1;
         JOBS.clip(dl, { x0, y0 }, { x1, ycut }, true);
         draw_image(dl, tex, x0, y0, x1, y1, nil, { 0.55, 0.55, 0.60, 0.28 });         -- the empty brush
@@ -1563,6 +1622,7 @@ function JOBS.sumi(dl, cx, cy, R, bs, fs)
             dl:AddCircleFilled({ gx, gy }, 2.2 * bs, u32({ 1, 1, 1, 0.7 + 0.25 * pulse }), 12);
         end
     end
+    JOBS.low_ring(dl, cx, cy, 1.02 * R, bs, now);
     return true;
 end
 
@@ -1580,12 +1640,8 @@ function JOBS.neon(dl, cx, cy, R, bs, fs)
         local v, lag = (side == 1) and b.hp or b.mp, (side == 1) and b.hp_lag or b.mp_lag;
         local c = (side == 1) and { 1.00, 0.24, 0.30 } or { 0.30, 0.58, 1.00 };
         local beat = JOBS.low_beat((side == 1) and JOBS.hpp or JOBS.mpp, now, side * 0.37);
-        if beat > 0 then
-            c = { c[1] + (1 - c[1]) * 0.35 * beat, c[2] + (1 - c[2]) * 0.35 * beat, c[3] + (1 - c[3]) * 0.35 * beat };
-            for k = 1, 4 do
-                JOBS.arc(dl, cx, cy, R, (side == 1) and 90 or -90, (side == 1) and 270 or 90, u32({ c[1], c[2], c[3], 0.07 * beat }), (6 + k * 5) * bs);
-            end
-        end
+        JOBS.low_side = JOBS.low_side or {};
+        JOBS.low_side[side] = { c = c, beat = beat, pct = (side == 1) and JOBS.hpp or JOBS.mpp };
         local cut = JOBS.cut_deg();
         local a1, a2 = (side == 1) and (90 + cut) or (90 - cut), (side == 1) and 270 or -90;   -- from the plaque up its own side
         local dir = (a2 > a1) and 1 or -1;
@@ -1610,6 +1666,7 @@ function JOBS.neon(dl, cx, cy, R, bs, fs)
             dl:AddCircleFilled({ cx + math.cos(ta) * R, cy + math.sin(ta) * R }, 1.8 * bs, u32({ 1, 1, 1, 0.9 }), 12);
         end
     end
+    JOBS.low_ring(dl, cx, cy, R, bs, now);
     return true;
 end
 
@@ -2869,6 +2926,7 @@ local function draw_settings()
             end);
             row_switch('##ye_midanim', 'Middle animation', 'mid_anim', 'On: the job icon / artwork in the middle is animated.\nOff: it stays still (lighter, if other addons shake).');
             row_switch('##ye_ring', 'HP / MP ring', 'show_ring', 'On: the HP / MP ring round the gear.\nOff: just the gear, floating.');
+            row_switch('##ye_lowfx', 'Low HP / MP glow', 'low_on', 'On: under 50% HP or MP, a soft glow breathes\non that side and its number.');
             row_stepper('ye_statsize', 'HP / MP text size', 'stat_size', 0.1, 0.6, 2.0);
             row_switch('##ye_bezelfx', 'Bezel animation', 'bezel_fx', 'On: a light glides along the HP / MP ring\nand the level pulses.\nOff: the ring stands still.');
         else
@@ -3023,6 +3081,9 @@ ashita.events.register('command', 'ye_command', function(e)
     elseif sub == 'still' then
         cfg.mid_anim = (cfg.mid_anim == false);
         msg('Middle animation ' .. (cfg.mid_anim and 'on.' or 'off.'));
+    elseif sub == 'low' then
+        cfg.low_on = (cfg.low_on == false);
+        msg('Low HP / MP glow ' .. (cfg.low_on and 'on.' or 'off.'));
     elseif sub == 'pulse' then
         cfg.bezel_fx = not cfg.bezel_fx;
         msg('Bezel animation ' .. (cfg.bezel_fx and 'on.' or 'off.'));
