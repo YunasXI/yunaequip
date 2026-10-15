@@ -1,6 +1,6 @@
 addon.name    = 'yunaequip';
 addon.author  = 'Yunas';
-addon.version = '1.0.1';
+addon.version = '1.0.2';
 addon.desc    = 'Your equipment on screen in the YunaGearOpt style: a wheel of gear round your animated job figure, HP / MP / TP on the bezel and your current gear set.';
 addon.link    = 'https://github.com/YunasXI/yunaequip';
 
@@ -47,6 +47,8 @@ local defaults = T{
     middle_v = 1,
     centre_fx = 'veins', -- the effect between the job icon and the gear (JOBS.FX_LIST)
     art_alpha = 1.0,   -- how solid the artwork in the middle is (0.1 - 1)
+    show_ring = true,  -- the HP / MP ring round the gear (off = the gear floats on its own)
+    mid_anim = true,   -- the animation of the icon / artwork in the middle (off = still, lighter)
     bezel_fx = true,   -- the light gliding along the HP / MP ring and the pulsing level (off = they stand still)
     stat_size = 1.0,   -- the size of the HP / MP / TP text
     theme   = 'sumi',    -- the Orbit's look: 'classic' (bars on the bezel), 'sumi' (ink brush ring), 'neon' (glowing ring)
@@ -412,7 +414,15 @@ local function resample(px, w, h, S)
     return { tex = tex, ptr = tonumber(ffi.cast('uint32_t', tex)) };
 end
 -- The icon at exactly S px (nil until it's been made; the 32 px one is used meanwhile)
+-- Plain Ashita runs DirectX 8: making new textures while playing can stall it, so there the game's own icons are
+-- used as they are (no sharp enlarged copies). VanaCore (DirectX 12) gets them.
+local IS_DX8 = nil;
 local function item_big(id, ic, S)
+    if IS_DX8 == nil then
+        IS_DX8 = true;
+        pcall(function() IS_DX8 = not AshitaCore:GetInstallPath():lower():find('vanacore', 1, true); end);
+    end
+    if IS_DX8 then return nil; end
     if ic == nil or ic.px == nil or S == ic.w then return nil; end
     local key = id .. ':' .. S;
     local b = bigs[key];
@@ -484,6 +494,9 @@ end
 
 -- While the figure in the middle is drawn, every picture is faded by the "Artwork opacity" setting
 local ART = { on = false, a = 1 };
+-- Troubleshooting: /ye debug <part> hides one part of the Orbit at a time ('icon' = whatever is in the middle,
+-- the job icon or the artwork) (to find what a player's PC dislikes)
+DBG = { ring = false, slots = false, icon = false, text = false, clamp = false };
 local function draw_image(dl, tex, x1, y1, x2, y2, alpha, tint)
     if ART.on then
         local t = tint or { 1, 1, 1, alpha or 1 };
@@ -521,6 +534,18 @@ local JOBS = {
     },
     on = 0, cast = 0, blade = 0,
 };
+-- Every clip rectangle goes through here: kept inside the screen, on whole pixels and at least 1 px in size.
+-- (On plain Ashita / DirectX 8 a clip rectangle partly off the screen or with no size seems to leave a wrong
+-- viewport behind, so every addon's window shakes.)
+JOBS.dsp = { 1e5, 1e5 };
+function JOBS.clip(dl, a, b, inter)
+    local w, h = JOBS.dsp[1], JOBS.dsp[2];
+    local x1 = math.floor(math.max(0, math.min(w - 1, a[1])));
+    local y1 = math.floor(math.max(0, math.min(h - 1, a[2])));
+    local x2 = math.ceil(math.max(x1 + 1, math.min(w, b[1])));
+    local y2 = math.ceil(math.max(y1 + 1, math.min(h, b[2])));
+    dl:PushClipRect({ x1, y1 }, { x2, y2 }, inter);
+end
 -- Out of combat the job's energy is dim and slowly breathing. Engaged or casting it flares up in the job's colour,
 -- swells and drifts a little, and an aura of the job's colour pulses round the figure (faster while casting).
 function JOBS.draw(dl, key, lx, ly, lw, engaged, casting, now, dt, bs, flash)
@@ -538,6 +563,7 @@ function JOBS.draw(dl, key, lx, ly, lw, engaged, casting, now, dt, bs, flash)
     JOBS.on = JOBS.on + (((engaged or casting) and 1 or 0) - JOBS.on) * math.min(1, dt * 3);
     JOBS.cast = JOBS.cast + ((casting and 1 or 0) - JOBS.cast) * math.min(1, dt * 3);
     local on, cast = JOBS.on, JOBS.cast;
+    if cfg.mid_anim == false then on, cast = 0, 0; end            -- "Middle animation" off: a still figure
     -- the pulse: its own phase moves on a little every frame, a bit faster while casting. (Working it out from the
     -- clock divided by a changing speed made it jump many times a second as the speed changed: a blinking mess.)
     JOBS.ph = ((JOBS.ph or 0) + dt / (1.8 - 0.5 * cast)) % 1;
@@ -625,7 +651,7 @@ function JOBS.draw(dl, key, lx, ly, lw, engaged, casting, now, dt, bs, flash)
                 if out > 0.98 then                                -- all the way out: the whole weapon
                     draw_image(dl, blades[i], bx1, by1, bx2, by2, nil, wtint);
                 else
-                    dl:PushClipRect({ math.min(gx, hx) - pad, math.min(gy, hy) - pad }, { math.max(gx, hx) + pad, math.max(gy, hy) + pad }, true);
+                    JOBS.clip(dl, { math.min(gx, hx) - pad, math.min(gy, hy) - pad }, { math.max(gx, hx) + pad, math.max(gy, hy) + pad }, true);
                     draw_image(dl, blades[i], bx1, by1, bx2, by2, nil, wtint);
                     dl:PopClipRect();
                 end
@@ -880,7 +906,7 @@ local function draw_fx(dl, mx, my, size, sc, ft, seed)
     local fade = (u < 0.55) and 1 or (1 - (u - 0.55) / 0.45);       -- then thins and fades
     if fade <= 0.01 then return; end
     local spill = 4 * sc;                                           -- a little past the slot's edge
-    dl:PushClipRect({ mx - size / 2 - spill, my - size / 2 - spill }, { mx + size / 2 + spill, my + size / 2 + spill }, true);
+    JOBS.clip(dl, { mx - size / 2 - spill, my - size / 2 - spill }, { mx + size / 2 + spill, my + size / 2 + spill }, true);
     size = size * 1.3;                                              -- a bigger cloud
     local spread = 0.85 + 0.35 * u;                                 -- the cloud slowly drifts apart
     local swirl = ft * 0.9;
@@ -1396,11 +1422,12 @@ function JOBS.stat(dl, x, y, ax, label, value, c, fs, bs, ytop, frac, beat)
     local vcol, vs = { 1, 1, 1, 1 }, 1;
     if label == 'TP' and (tonumber(value) or 0) >= 1000 then
         local p = 0.5 - 0.5 * math.cos((os.clock() % 1.3) / 1.3 * math.pi * 2);
-        vs = 1 + 0.14 * p;
+        vs = 1;                                                 -- (no size change: a text size that changes every frame
+                                                                -- makes newer ImGui re-make its fonts each frame = stutter in every addon)
         vcol = { 1, 1 - 0.12 * p, 1 - 0.55 * p, 1 };
         local gx, gy = vx + vw / 2, vy + vh / 2;
-        for k = 1, 4 do                                         -- a soft gold glow behind it
-            dl:AddCircleFilled({ gx, gy + 1 * bs }, vh * (0.75 - k * 0.1) * (1 + 0.2 * p), u32({ 1, 0.80, 0.30, 0.06 * p }), 24);
+        for k = 1, 5 do                                         -- a soft gold glow behind it, swelling with the pulse
+            dl:AddCircleFilled({ gx, gy + 1 * bs }, vh * (0.80 - k * 0.1) * (1 + 0.35 * p), u32({ 1, 0.80, 0.30, 0.08 * p }), 24);
         end
     end
     scale(21 * bs * vs);
@@ -1488,18 +1515,18 @@ function JOBS.sumi(dl, cx, cy, R, bs, fs)
             end
         end
         local sx0, sx1 = (side == 1) and x0 or cx, (side == 1) and cx or x1;
-        dl:PushClipRect({ x0, y0 }, { x1, ycut }, true);
+        JOBS.clip(dl, { x0, y0 }, { x1, ycut }, true);
         draw_image(dl, tex, x0, y0, x1, y1, nil, { 0.55, 0.55, 0.60, 0.28 });         -- the empty brush
         dl:PopClipRect();
         local lv = bot_ - (bot_ - top_) * math.min(1, v);
         if lag and lag > v + 0.002 then                                 -- what was just lost, draining
-            dl:PushClipRect({ sx0, bot_ - (bot_ - top_) * lag }, { sx1, lv }, true);
+            JOBS.clip(dl, { sx0, bot_ - (bot_ - top_) * lag }, { sx1, lv }, true);
             draw_image(dl, tex, x0, y0, x1, y1, nil, { 1, 0.95, 0.9, 0.55 });
             dl:PopClipRect();
         end
         if v > 0.003 then
             -- the filled ink, in full colour (twice, so it really shines)
-            dl:PushClipRect({ sx0, lv }, { sx1, ycut }, true);
+            JOBS.clip(dl, { sx0, lv }, { sx1, ycut }, true);
             draw_image(dl, tex, x0, y0, x1, y1, nil, { c[1], c[2], c[3], 1 });
             draw_image(dl, tex, x0, y0, x1, y1, nil, { math.min(1, c[1] + 0.25), math.min(1, c[2] + 0.25), math.min(1, c[3] + 0.25), 0.45 });
             dl:PopClipRect();
@@ -1675,7 +1702,7 @@ function JOBS.current_set()
     local job = 0;
     pcall(function() job = AshitaCore:GetMemoryManager():GetPlayer():GetMainJob(); end);
     if JOBS.sets_job ~= job or now > (JOBS.sets_t or 0) then
-        JOBS.sets, JOBS.sets_job, JOBS.sets_t = JOBS.load_sets(), job, now + 20;
+        JOBS.sets, JOBS.sets_job, JOBS.sets_t = JOBS.load_sets(), job, now + 60;
         JOBS.set_sig = nil;
     end
     if JOBS.sets == nil then return nil; end
@@ -2039,13 +2066,13 @@ function JOBS.icon_smoke(dl, ic, cx, cy, half, bs, now, jab)
     -- the user's ink art keeps its own colours; a soft band of light slowly rises through it (inside the art only)
     draw_image(dl, sym, cx - h, cy - h, cx + h, cy + h, 1);
     local y0, y1 = cy - h, cy + h;
-    local N = 12;
+    local N = (cfg.mid_anim == false) and 0 or 12;                -- "Middle animation" off: a still icon
     local shine = (now * 0.25) % 1.4 - 0.2;                         -- 1 = top, 0 = bottom
     for q = 0, N - 1 do
         local f = (q + 0.5) / N;
         local sh = math.max(0, 1 - math.abs((1 - f) - shine) / 0.16);
         if sh > 0.01 then
-            dl:PushClipRect({ cx - h, y0 + (y1 - y0) * q / N }, { cx + h, y0 + (y1 - y0) * (q + 1) / N + 0.5 }, true);
+            JOBS.clip(dl, { cx - h, y0 + (y1 - y0) * q / N }, { cx + h, y0 + (y1 - y0) * (q + 1) / N + 0.5 }, true);
             draw_image(dl, sym, cx - h, cy - h, cx + h, cy + h, nil, { col[1] + (1 - col[1]) * 0.5, col[2] + (1 - col[2]) * 0.5, col[3] + (1 - col[3]) * 0.5, 0.45 * sh });
             dl:PopClipRect();
         end
@@ -2173,8 +2200,8 @@ function JOBS.overlay(dl, cx, cy, R, bs, fs, theme)
     -- HP on the left and MP on the right, outside the ring at mid height: the ring itself shows how full they are
     local now_ = os.clock();
     local hb, mb = JOBS.low_beat(JOBS.hpp, now_, 0.37), JOBS.low_beat(JOBS.mpp, now_, 0.74);
-    JOBS.stat(dl, cx - R * 1.10, cy, -1, 'HP', tostring(hp), hpc, fs, bs * (1 + 0.10 * hb), nil, b.hp, hb);
-    JOBS.stat(dl, cx + R * 1.10, cy, 1, 'MP', tostring(mp), mpc, fs, bs * (1 + 0.10 * mb), nil, b.mp, mb);
+    JOBS.stat(dl, cx - R * 1.10, cy, -1, 'HP', tostring(hp), hpc, fs, bs, nil, b.hp, hb);
+    JOBS.stat(dl, cx + R * 1.10, cy, 1, 'MP', tostring(mp), mpc, fs, bs, nil, b.mp, mb);
     -- TP in the middle at the bottom: a small gold notch, the label, the value, and short gold lines either side
     -- TP above the wheel (the job pill is underneath)
     local ss = math.max(0.6, math.min(2.0, tonumber(cfg.stat_size) or 1));
@@ -2189,6 +2216,7 @@ function JOBS.disc(dl, cx, cy, R, ring_r, bs, gs, c1, c2, jkey, fs)
     local theme = cfg.theme or 'classic';
     if theme ~= 'classic' then
         JOBS.last_hp, JOBS.last_mp, JOBS.last_tp = JOBS.stats();
+        if DBG.ring or cfg.show_ring == false then return; end      -- "Ring" off: just the gear, no HP / MP ring
         if theme == 'sumi' and JOBS.sumi(dl, cx, cy, R, bs, fs) then JOBS.plaque_draw(dl, cx, cy, R); return; end
         if JOBS.neon(dl, cx, cy, R, bs, fs) then JOBS.plaque_draw(dl, cx, cy, R); return; end
     end
@@ -2247,7 +2275,7 @@ end
 -- equipped ones and one every few frames, so whatever you swap into is sharp straight away. The list is
 -- refreshed every minute and whenever the icon size changes.
 function JOBS.prewarm()
-    if #big_queue > 0 or ye.big_S == nil then return; end
+    if #big_queue > 0 or ye.big_S == nil or ye.big_S <= 34 or IS_DX8 ~= false then return; end   -- icons drawn at their own size need no copy
     local now = os.clock();
     if ye.warm_list == nil or ye.warm_S ~= ye.big_S or now > ye.warm_rescan then
         local list, seen = {}, {};
@@ -2268,7 +2296,7 @@ function JOBS.prewarm()
         ye.warm_list, ye.warm_i, ye.warm_S, ye.warm_rescan = list, 1, ye.big_S, now + 60;
     end
     ye.warm_tick = (ye.warm_tick or 0) + 1;
-    if ye.warm_tick % 3 ~= 0 then return; end
+    if ye.warm_tick % 20 ~= 0 then return; end                    -- gently: one icon every 20 frames
     for _ = 1, 40 do                                       -- skip the ones already done, then make one
         local id = ye.warm_list[ye.warm_i];
         if id == nil then return; end
@@ -2418,7 +2446,9 @@ local function draw_card(status)
     local TILE = math.floor(base * sc);
     local GAP, CP = math.max(2, math.floor(5 * sc * d)), math.max(3, math.floor(5 * sc * d));
     local ss_ = math.max(0.6, math.min(2.0, tonumber(cfg.stat_size) or 1));
-    local M = math.floor((cfg.style == 'orbit' and (((cfg.theme or 'classic') ~= 'classic') and (20 + 88 * ss_) or (12 + 40 * ss_)) or 18) * bs);                                  -- room around the card for the glow and shadow
+    local M = math.floor((cfg.style == 'orbit' and (((cfg.theme or 'classic') ~= 'classic') and (20 + 88 * ss_) or (12 + 40 * ss_)) or 18) * bs);
+    -- above / below the wheel only TP and the set name need room: a much smaller margin there
+    local MY = (cfg.style == 'orbit') and math.floor((14 + 34 * ss_) * bs) or M;                                  -- room around the card for the glow and shadow
     local fs = font_scale(sc);
     local orbit = cfg.style == 'orbit';
 
@@ -2454,11 +2484,14 @@ local function draw_card(status)
         imgui.SetWindowFontScale(fs);
         local dl = imgui.GetWindowDrawList();
         local ox, oy = imgui.GetCursorScreenPos();
-        local cx1, cy1 = ox + M, oy + M;
+        local cx1, cy1 = ox + M, oy + MY;
         local cx2, cy2 = cx1 + card_w, cy1 + card_h;
         local R = math.max(3, math.floor(8 * bs));
-        local win, win_h = card_w + M * 2, card_h + M * 2;
-        dl:PushClipRect({ ox, oy }, { ox + win, oy + win_h }, false);
+        local win, win_h = card_w + M * 2, card_h + MY * 2;
+        local dsp = { 1e5, 1e5 };
+        pcall(function() local io_ = imgui.GetIO(); dsp = { io_.DisplaySize.x, io_.DisplaySize.y }; end);
+        JOBS.dsp = dsp;
+        JOBS.clip(dl, { math.max(0, ox), math.max(0, oy) }, { math.min(dsp[1], ox + win), math.min(dsp[2], oy + win_h) }, false);   -- never past the screen
 
         local gs, gcol, gcol2 = update_glow(status);
         local now = os.clock();
@@ -2478,7 +2511,7 @@ local function draw_card(status)
             for j, o in ipairs(ORBIT) do
                 local a = math.rad(o[2]) + rot;
                 local mx, my = ccx + math.cos(a) * ring_r, ccy + math.sin(a) * ring_r;
-                draw_slot(k, j, o[1], mx - RT / 2, my - RT / 2, RT, 0.10 + (j - 1) * 0.035);       -- the ripple runs round the ring
+                if not DBG.slots then draw_slot(k, j, o[1], mx - RT / 2, my - RT / 2, RT, 0.10 + (j - 1) * 0.035); end       -- the ripple runs round the ring
             end
             -- the Yuna logo in the middle (it pops with the engage ripple too). Out of combat the katana is sheathed
             -- (only the hilt shows); when you engage it slides out of the hilt with a glint, and blood starts to drip.
@@ -2498,14 +2531,14 @@ local function draw_card(status)
                         local ra = now - ye.ripple_t;
                         if ra > 0 and ra < 0.45 then half = half * (1 + 0.08 * math.sin(ra / 0.45 * math.pi)); end
                     end
-                    JOBS.icon_smoke(dl, ic, ccx, ccy, half, bs, now, jab);
+                    if not DBG.icon then JOBS.icon_smoke(dl, ic, ccx, ccy, half, bs, now, jab); end
                     jdone = true;
                 end
             elseif mid == 'set' then
                 JOBS.mid_label(dl, ccx, ccy, ring_r - RT / 2 - 6 * bs, bs, fs, JOBS.set_label(status), jkey or (jab and jab:lower()));
                 jdone = true;
             end
-            if jkey and mid == 'art' then
+            if jkey and mid == 'art' and not DBG.icon then
                 local half = (ring_r - RT / 2 - 6 * bs) * 0.74;
                 local flash = 0;
                 if cfg.ripple and ye.ripple_t then
@@ -2527,7 +2560,7 @@ local function draw_card(status)
             local body, blade, hilt = logo_texture('logo_body.png'), logo_texture('logo_blade.png'), logo_texture('logo_hilt.png');
             local full = (body == nil or blade == nil or hilt == nil) and logo_texture('logo.png') or nil;
             if full then body, blade, hilt = nil, nil, nil; end
-            if not jdone and mid == 'art' and (body or full) then
+            if not jdone and mid == 'art' and not DBG.icon and (body or full) then
                 local half = (ring_r - RT / 2 - 6 * bs) * 0.74;      -- filling the space inside the ring
                 if cfg.ripple and ye.ripple_t then
                     local ra = now - ye.ripple_t;
@@ -2568,7 +2601,7 @@ local function draw_card(status)
                     local gx, gy = lx + BLADE_AXIS[1] * lw, ly + BLADE_AXIS[2] * lw;
                     local hx = gx + (BLADE_AXIS[3] - BLADE_AXIS[1]) * lw * out;
                     local hy = gy + (BLADE_AXIS[4] - BLADE_AXIS[2]) * lw * out;
-                    dl:PushClipRect({ gx - 0.04 * lw, gy - 0.08 * lw }, { hx + 0.03 * lw, hy + 0.10 * lw }, true);
+                    JOBS.clip(dl, { gx - 0.04 * lw, gy - 0.08 * lw }, { hx + 0.03 * lw, hy + 0.10 * lw }, true);
                     draw_image(dl, blade, lx, ly, lx + lw, ly + lw, nil, tint);
                     dl:PopClipRect();
                     if ye.blade < 1 and engaged then                  -- a glint running along the edge as it comes out
@@ -2582,7 +2615,7 @@ local function draw_card(status)
                 if out > 0.97 or full then logo_blood(dl, lx, ly, lw); end   -- blood only off a drawn blade
             end
             ART.on = false;
-            if (cfg.theme or 'classic') ~= 'classic' then JOBS.overlay(dl, ccx, ccy, disc_r, bs, fs, cfg.theme); end
+            if not DBG.text and (cfg.theme or 'classic') ~= 'classic' then JOBS.overlay(dl, ccx, ccy, disc_r, bs, fs, cfg.theme); end
             -- the state name in a notch on the top of the circle, like the card
             if cfg.state then draw_state(dl, ccx, cy1, lsc, state_name(status), gcol, gcol2, disc_r * 1.4); end
             if cfg.mptimer then draw_mp_timer(dl, ccx, cy1 + card_h, lsc, gcol, gcol2, disc_r * 1.6); end
@@ -2623,6 +2656,7 @@ local function draw_card(status)
         -- it may hang off the edges, but the wheel itself (and a bit of room for TP / the set name) always stays
         -- inside the game window. This also brings it back if it was saved on a bigger screen.
         pcall(function()
+            if DBG.clamp then return; end
             local io = imgui.GetIO();
             local dw, dh = io.DisplaySize.x, io.DisplaySize.y;
             if dw and dh and dw > 100 and dh > 100 then
@@ -2833,6 +2867,8 @@ local function draw_settings()
             row_choice('ye_bottom', 'Under the wheel', ({ set = 'Gear set', off = 'Off' })[cfg.bottom] or 'Gear set', function(dir)
                 cfg.bottom = step_list({ 'set', 'off' }, cfg.bottom or 'set', dir);
             end);
+            row_switch('##ye_midanim', 'Middle animation', 'mid_anim', 'On: the job icon / artwork in the middle is animated.\nOff: it stays still (lighter, if other addons shake).');
+            row_switch('##ye_ring', 'HP / MP ring', 'show_ring', 'On: the HP / MP ring round the gear.\nOff: just the gear, floating.');
             row_stepper('ye_statsize', 'HP / MP text size', 'stat_size', 0.1, 0.6, 2.0);
             row_switch('##ye_bezelfx', 'Bezel animation', 'bezel_fx', 'On: a light glides along the HP / MP ring\nand the level pulses.\nOff: the ring stands still.');
         else
@@ -2971,6 +3007,22 @@ ashita.events.register('command', 'ye_command', function(e)
         local want = (args[3] or ''):lower();
         cfg.middle = (o[want] ~= nil) and want or (o[cfg.middle] or 'icon');
         msg('Middle: ' .. cfg.middle .. '   (art, icon)');
+    elseif sub == 'debug' then
+        local part = (args[3] or ''):lower();
+        if DBG[part] ~= nil then
+            DBG[part] = not DBG[part];
+            msg('Debug: ' .. part .. ' ' .. (DBG[part] and 'HIDDEN' or 'shown') .. '   (ring, slots, icon, text, clamp)');
+        else
+            local t = {};
+            for k2, v in pairs(DBG) do t[#t + 1] = k2 .. '=' .. (v and 'hidden' or 'shown'); end
+            msg('Debug parts: ' .. table.concat(t, ', ') .. '   - /ye debug <part> hides / shows one');
+        end
+    elseif sub == 'ring' then
+        cfg.show_ring = not (cfg.show_ring ~= false);
+        msg('HP / MP ring ' .. (cfg.show_ring and 'on.' or 'off.'));
+    elseif sub == 'still' then
+        cfg.mid_anim = (cfg.mid_anim == false);
+        msg('Middle animation ' .. (cfg.mid_anim and 'on.' or 'off.'));
     elseif sub == 'pulse' then
         cfg.bezel_fx = not cfg.bezel_fx;
         msg('Bezel animation ' .. (cfg.bezel_fx and 'on.' or 'off.'));

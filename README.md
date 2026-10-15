@@ -30,6 +30,8 @@ Your equipment on screen for **CatsEyeXI** (Ashita v4 and VanaCore), in the same
 | `/ye blm` | Black Mage picture: wizard or warlock |
 | `/ye art <10-100>` | Artwork opacity: how see-through the figure in the middle is |
 | `/ye middle [art \| icon]` | The middle of the wheel: your job's artwork or its job icon |
+| `/ye ring` | The HP / MP ring on or off (off: the gear floats on its own) |
+| `/ye still` | The middle's animation on or off (off: a still icon / artwork, lighter) |
 | `/ye test` | Play the Shadow swap effect on every slot |
 | `/ye lock` / `unlock` | Stop or allow dragging |
 | `/ye mini` | Mini mode (16 px icons) |
